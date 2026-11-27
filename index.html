@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rekod Murid Prasekolah (Prototaip v4)</title>
+<style>
+  :root { --biru:#1f4e79; --merah:#b03a2e; --kelabu:#f2f2f2; --sempadan:#c9c9c9; }
+  * { box-sizing:border-box; }
+  body { font-family:Arial, "Noto Sans", sans-serif; margin:0; background:#fff; color:#222; font-size:15px; }
+  header { background:var(--biru); color:#fff; padding:10px 14px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+  header h1 { font-size:17px; margin:0; }
+  nav button { background:#fff; color:var(--biru); border:0; border-radius:4px; padding:6px 10px; margin-left:4px; cursor:pointer; }
+  nav button.aktif { background:#dce8f5; font-weight:bold; }
+  main { padding:14px; max-width:1000px; margin:0 auto; }
+  h2 { color:var(--biru); font-size:18px; margin:6px 0 12px; }
+  h3 { color:var(--biru); font-size:15px; margin:16px 0 8px; border-bottom:1px solid var(--sempadan); padding-bottom:4px; }
+  button, .btn { font:inherit; padding:7px 12px; border-radius:4px; border:1px solid var(--biru); background:var(--biru); color:#fff; cursor:pointer; margin:2px; }
+  button.sekunder { background:#fff; color:var(--biru); }
+  button.bahaya { background:var(--merah); border-color:var(--merah); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  input, select, textarea { font:inherit; padding:6px; border:1px solid var(--sempadan); border-radius:4px; width:100%; max-width:420px; }
+  textarea { max-width:100%; min-height:60px; }
+  label { display:block; margin:8px 0 3px; font-weight:bold; font-size:14px; }
+  .medan { margin-bottom:6px; }
+  .ralat { color:var(--merah); font-size:13px; margin-top:2px; }
+  .amaran { background:#fff4e5; border:1px solid #e0a040; padding:8px 10px; border-radius:4px; margin:10px 0; font-size:14px; }
+  .maklumat { background:#eef5fb; border:1px solid #b9d3ea; padding:8px 10px; border-radius:4px; margin:10px 0; font-size:14px; }
+  .jadual { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:14px; }
+  th, td { border:1px solid var(--sempadan); padding:6px; text-align:left; vertical-align:top; }
+  th { background:var(--kelabu); }
+  tr.dipadam td { color:#888; text-decoration:line-through; }
+  .baris { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:8px 0; }
+  .pj { border:1px dashed var(--sempadan); padding:8px; border-radius:4px; margin:8px 0; }
+  .kecil { font-size:12px; color:#555; }
+  .cetak-tarikh { font-size:10px; color:#666; margin-top:20px; text-align:right; }
+  @media print {
+    header, nav, .tiada-cetak { display:none !important; }
+    main { padding:0; }
+    body { font-size:12px; }
+    table { font-size:11px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rekod Murid Prasekolah (Prototaip v4)</h1>
+  <nav id="nav" class="tiada-cetak"></nav>
+</header>
+<main id="app">Memuatkan...</main>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Pemalar ----------
+  var KEY_SULIT = 'rmp_v4_sulit';
+  var ITER = 200000;
+  var KATA_MIN = 6;
+  var AGAMA = ['Islam', 'Buddha', 'Hindu', 'Kristian', 'Sikh', 'Tiada', 'Lain-lain'];
+  var BANGSA = ['Melayu', 'Bumiputera Sarawak', 'Bumiputera Sabah', 'Cina', 'India', 'Lain-lain'];
+  var HUBUNGAN = ['Ibu', 'Bapa', 'Penjaga'];
+  var STATUS = ['Aktif', 'Berpindah', 'Keluar'];
+  var JANTINA = ['Lelaki', 'Perempuan'];
+  var PENDAPATAN = ['Di bawah RM1,000', 'RM1,000 hingga RM2,999', 'RM3,000 hingga RM4,999', 'RM5,000 ke atas', 'Tidak pasti'];
+  var STATUS_YATIM = ['Tidak yatim', 'Yatim', 'Piatu', 'Yatim piatu'];
+  var HUBUNGAN_ADIK = ['Abang', 'Kakak', 'Adik'];
+  var JENIS_KENDERAAN = ['Kereta', 'Motosikal', 'Van', 'Basikal', 'Lain-lain'];
+  var KUMPUL_UMUR = ['5 tahun', '6 tahun', 'Lain-lain umur'];
+
+  // ---------- Keadaan (kunci dan data hanya dalam ingatan) ----------
+  var kunci = null;        // CryptoKey AES-GCM, hanya dalam memori
+  var saltSemasa = null;   // hex, salt PBKDF2 semasa
+  var data = { students: [] };
+  var tulisan = Promise.resolve();
+  var st = { view: 'senarai', id: null, cari: '', tapis: 'Semua', umur: 'Semua', papar: false, errs: {}, draf: null, mesej: '' };
+
+  // ---------- Utiliti ----------
+  var enc = new TextEncoder();
+  var dec = new TextDecoder();
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function hex(bytes) { return Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join(''); }
+  function unhex(h) { var a = new Uint8Array(h.length / 2); for (var i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16); return a; }
+  function rawSalt() { return hex(crypto.getRandomValues(new Uint8Array(16))); }
+  function idBaharu(p) { return p + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function tarikhPapar(iso) {
+    if (!iso) return '';
+    var p = String(iso).split('-');
+    return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : iso;
+  }
+  function umurTahun(iso) {
+    if (!iso) return null;
+    var lahir = new Date(iso), kini = new Date();
+    var u = kini.getFullYear() - lahir.getFullYear();
+    if (kini.getMonth() < lahir.getMonth() || (kini.getMonth() === lahir.getMonth() && kini.getDate() < lahir.getDate())) u--;
+    return u;
+  }
+  function umur(iso) {
+    var u = umurTahun(iso);
+    if (u === null) return '';
+    if (u >= 1) return u + ' tahun';
+    var lahir = new Date(iso), kini = new Date();
+    var bulan = (kini.getFullYear() - lahir.getFullYear()) * 12 + (kini.getMonth() - lahir.getMonth());
+    if (kini.getDate() < lahir.getDate()) bulan--;
+    return Math.max(bulan, 0) + ' bulan';
+  }
+  function kumpulUmur(m) {
+    var u = umurTahun(m.tarikhLahir);
+    return u === 5 ? '5 tahun' : (u === 6 ? '6 tahun' : 'Lain-lain umur');
+  }
+  function labelUmur(g) { return g === 'Lain-lain umur' ? 'Umur lain' : 'Umur ' + g; }
+  function susunNama(a, b) { return String(a.nama || '').localeCompare(String(b.nama || ''), 'ms', { sensitivity: 'base' }); }
+  function jantinaDariMyKid(s) {
+    var d = String(s || '').replace(/\D/g, '');
+    if (d.length !== 12) return '';
+    return (parseInt(d.charAt(11), 10) % 2 === 1) ? 'Lelaki' : 'Perempuan';
+  }
+  function formatMyKid(s) {
+    var d = String(s || '').replace(/\D/g, '').slice(0, 12);
+    var o = d.slice(0, 6);
+    if (d.length > 6) o += '-' + d.slice(6, 8);
+    if (d.length > 8) o += '-' + d.slice(8);
+    return o;
+  }
+  function tarikhKini() {
+    var d = new Date();
+    return d.getDate() + '/' + (d.getMonth() + 1) + '/' + d.getFullYear() + ' ' +
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function hariIsoKini() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function telefonSah(t) { return /^0\d{9,10}$/.test(String(t || '').replace(/[\s\-\.\(\)]/g, '')); }
+  function normTelefon(t) { return String(t || '').replace(/[\s\-\.\(\)]/g, ''); }
+  function murid(id) { for (var i = 0; i < data.students.length; i++) if (data.students[i].id === id) return data.students[i]; return null; }
+  function opsi(senarai, nilai) {
+    return senarai.map(function (x) { return '<option' + (nilai === x ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('');
+  }
+  function ralat(k) { return st.errs[k] ? '<div class="ralat">' + esc(st.errs[k]) + '</div>' : ''; }
+
+  // ---------- Kriptografi: PBKDF2 terbitkan kunci AES-GCM daripada kata laluan ----------
+  async function kunciDari(kata, saltHex, iter) {
+    var bahan = await crypto.subtle.importKey('raw', enc.encode(kata), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: unhex(saltHex), iterations: iter, hash: 'SHA-256' },
+      bahan, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+    );
+  }
+  async function sulit(kunciAES, teks) {
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, kunciAES, enc.encode(teks));
+    return { iv: hex(iv), ct: hex(new Uint8Array(ct)) };
+  }
+  async function nyahSulit(kunciAES, iv, ct) {
+    var p = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unhex(iv) }, kunciAES, unhex(ct));
+    return dec.decode(p);
+  }
+  function bacaSulit() { try { return JSON.parse(localStorage.getItem(KEY_SULIT)); } catch (e) { return null; } }
+
+  // Tulis data sulit ke storan. Tulisan dibuat satu demi satu.
+  function simpan() {
+    tulisan = tulisan.then(async function () {
+      if (!kunci) return;
+      var r = await sulit(kunci, JSON.stringify(data));
+      localStorage.setItem(KEY_SULIT, JSON.stringify({ v: 2, iter: ITER, salt: saltSemasa, iv: r.iv, ct: r.ct }));
+    }).catch(function () { st.mesej = 'Gagal menyimpan data. Cuba semula.'; render(); });
+    return tulisan;
+  }
+
+  // Semak kata laluan dengan mencuba nyahsulit data semasa.
+  async function sahkanKata(kata) {
+    var s = bacaSulit();
+    if (!s) return false;
+    try {
+      var k = await kunciDari(kata, s.salt, s.iter);
+      await nyahSulit(k, s.iv, s.ct);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  async function sediakanKata(kata) {
+    saltSemasa = rawSalt();
+    kunci = await kunciDari(kata, saltSemasa, ITER);
+    data = { students: [] };
+    await simpan();
+  }
+  async function bukaDenganKata(kata) {
+    var s = bacaSulit();
+    if (!s) return false;
+    try {
+      var k = await kunciDari(kata, s.salt, s.iter);
+      var teks = await nyahSulit(k, s.iv, s.ct);
+      var d = JSON.parse(teks);
+      data = { students: Array.isArray(d.students) ? d.students : [] };
+      kunci = k; saltSemasa = s.salt;
+      return true;
+    } catch (e) { return false; }
+  }
+  async function tukarKata(lama, baru) {
+    if (!(await sahkanKata(lama))) return false;
+    saltSemasa = rawSalt();
+    kunci = await kunciDari(baru, saltSemasa, ITER);
+    await simpan();
+    return true;
+  }
+  function logKeluarSenyap() {
+    kunci = null; saltSemasa = null; data = { students: [] };
+    st.view = 'senarai'; st.draf = null; st.errs = {}; st.id = null;
+  }
+
+  // ---------- Navigasi ----------
+  function sudahLog() { return !!kunci; }
+  function nav() {
+    var n = document.getElementById('nav');
+    if (!sudahLog()) { n.innerHTML = ''; return; }
+    var pautan = [['senarai', 'Senarai murid'], ['borang', 'Tambah murid'], ['laporan', 'Laporan'], ['sandaran', 'Sandaran dan kata laluan'], ['log keluar', 'Log keluar']];
+    n.innerHTML = pautan.map(function (p) {
+      var aktif = st.view === p[0] ? ' aktif' : '';
+      return '<button class="' + aktif.trim() + '" onclick="tukar(\'' + p[0] + '\')">' + p[1] + '</button>';
+    }).join('');
+  }
+  window.tukar = function (v) {
+    if (v === 'log keluar') { logKeluarSenyap(); st.mesej = 'Anda telah log keluar.'; return render(); }
+    if (v === 'borang') { st.draf = bukaDrafBaharu(); st.errs = {}; st.id = null; }
+    st.view = v; st.mesej = ''; render();
+  };
+
+  function render() {
+    nav();
+    var app = document.getElementById('app');
+    if (!bacaSulit()) return app.innerHTML = paparSediaKata();
+    if (!sudahLog()) return app.innerHTML = paparLog();
+    var html = '';
+    if (st.view === 'senarai') html = paparSenarai();
+    else if (st.view === 'borang') html = paparBorang();
+    else if (st.view === 'profil') html = paparProfil();
+    else if (st.view === 'laporan') html = paparLaporan();
+    else if (st.view === 'sandaran') html = paparSandaran();
+    app.innerHTML = (st.mesej ? '<div class="maklumat">' + esc(st.mesej) + '</div>' : '') + html;
+  }
+
+  // ---------- Sediakan kata laluan dan log masuk ----------
+  function paparSediaKata() {
+    return '<h2>Tetapkan kata laluan</h2>' +
+      '<div class="amaran"><b>Amaran:</b> Data disulitkan dengan kata laluan ini. Jika kata laluan lupa, data TIDAK boleh dipulihkan. Simpan fail sandaran dengan kata laluan yang anda ingat.</div>' +
+      '<div class="medan"><label>Kata laluan (minimum ' + KATA_MIN + ' aksara, huruf dan nombor)</label><input type="password" id="k1"></div>' +
+      '<div class="medan"><label>Sahkan kata laluan</label><input type="password" id="k2"></div>' +
+      '<div id="log" class="ralat"></div>' +
+      '<button onclick="sediaKata()">Simpan kata laluan</button>';
+  }
+  window.sediaKata = async function () {
+    var a = document.getElementById('k1').value, b = document.getElementById('k2').value;
+    var log = document.getElementById('log');
+    if (!/^[A-Za-z0-9]+$/.test(a) || a.length < KATA_MIN) { log.textContent = 'Kata laluan minimum ' + KATA_MIN + ' aksara, huruf dan nombor sahaja.'; return; }
+    if (a !== b) { log.textContent = 'Kata laluan tidak sama.'; return; }
+    await sediakanKata(a);
+    st.view = 'senarai'; st.mesej = 'Kata laluan ditetapkan. Data disulitkan.'; render();
+  };
+  function paparLog() {
+    return '<h2>Log masuk</h2>' +
+      '<div class="medan"><label>Kata laluan</label><input type="password" id="kl" onkeydown="if(event.key===\'Enter\')logMasuk()"></div>' +
+      '<div id="log" class="ralat"></div>' +
+      '<button onclick="logMasuk()">Log masuk</button>' +
+      '<div class="kecil">Data hanya boleh dibuka dengan kata laluan. Tutup pelayar atau log keluar untuk mengunci data.</div>';
+  }
+  window.logMasuk = async function () {
+    var log = document.getElementById('log');
+    log.textContent = 'Memproses...';
+    var ok = await bukaDenganKata(document.getElementById('kl').value);
+    if (!ok) { log.textContent = 'Kata laluan salah.'; return; }
+    st.view = 'senarai'; st.mesej = ''; render();
+  };
+
+  // ---------- Senarai murid ----------
+  function padan(m, status, umurPilih, cari) {
+    if (status !== 'Semua' && (m.statusMurid || 'Aktif') !== status) return false;
+    if (umurPilih !== 'Semua' && kumpulUmur(m) !== umurPilih) return false;
+    if (cari && String(m.nama || '').toLowerCase().indexOf(cari) === -1) return false;
+    return true;
+  }
+  function kumpulanSusun(senarai) {
+    return KUMPUL_UMUR.map(function (g) {
+      return { g: g, label: labelUmur(g), ahli: senarai.filter(function (m) { return kumpulUmur(m) === g; }).sort(susunNama) };
+    }).filter(function (k) { return k.ahli.length; });
+  }
+  function barisJadual(m) {
+    var ibu = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Ibu'; })[0];
+    var bapa = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Bapa'; })[0];
+    var kls = m.dipadam ? ' class="dipadam"' : '';
+    return '<tr' + kls + '><td>' + esc(m.nama) + (m.dipadam ? ' <span class="kecil">(dipadam)</span>' : '') + '</td>' +
+      '<td>' + esc(m.jantina) + '</td><td>' + esc(m.bangsa) + '</td><td>' + esc(umur(m.tarikhLahir)) + '</td>' +
+      '<td>' + esc(m.statusMurid || 'Aktif') + '</td>' +
+      '<td>' + esc(ibu ? ibu.telefon : '') + ' ' + esc(bapa ? bapa.telefon : '') + '</td>' +
+      '<td><button class="sekunder" onclick="lihat(\'' + m.id + '\')">Lihat</button></td></tr>';
+  }
+  function paparSenarai() {
+    var cari = st.cari.trim().toLowerCase();
+    var senarai = data.students.filter(function (m) {
+      return (st.papar || !m.dipadam) && padan(m, st.tapis, st.umur, cari);
+    });
+    var kump = kumpulanSusun(senarai).map(function (k) {
+      return '<h3>' + esc(k.label) + ' (' + k.ahli.length + ')</h3><div class="jadual">' +
+        '<table><tr><th>Nama</th><th>Jantina</th><th>Bangsa</th><th>Umur</th><th>Status</th><th>Telefon ibu / bapa</th><th></th></tr>' +
+        k.ahli.map(barisJadual).join('') + '</table></div>';
+    }).join('');
+    return '<h2>Senarai murid</h2>' +
+      '<div class="baris"><input id="cari" placeholder="Cari nama" value="' + esc(st.cari) + '" oninput="cariSenarai(this.value)" style="max-width:240px">' +
+      '<select onchange="tapisSenarai(this.value)" style="max-width:150px" title="Status">' +
+      ['Semua', 'Aktif', 'Berpindah', 'Keluar'].map(function (x) { return '<option' + (st.tapis === x ? ' selected' : '') + '>' + x + '</option>'; }).join('') +
+      '</select>' +
+      '<select onchange="tapisUmur(this.value)" style="max-width:150px" title="Umur">' +
+      ['Semua', '5 tahun', '6 tahun', 'Lain-lain umur'].map(function (x) { return '<option value="' + x + '"' + (st.umur === x ? ' selected' : '') + '>' + (x === 'Semua' ? 'Semua umur' : x) + '</option>'; }).join('') +
+      '</select>' +
+      '<label style="display:inline;margin:0"><input type="checkbox" style="width:auto;max-width:none" ' + (st.papar ? 'checked' : '') + ' onchange="papar(this.checked)"> Papar yang dipadam</label>' +
+      '<button onclick="tukar(\'borang\')">Tambah murid</button></div>' +
+      '<div class="kecil">Jumlah dipaparkan: ' + senarai.length + '. Disusun mengikut umur, kemudian nama A hingga Z.</div>' +
+      (kump || '<div class="maklumat">Tiada rekod.</div>');
+  }
+  window.cariSenarai = function (v) { st.cari = v; render(); document.getElementById('cari').focus(); };
+  window.tapisSenarai = function (v) { st.tapis = v; render(); };
+  window.tapisUmur = function (v) { st.umur = v; render(); };
+  window.papar = function (v) { st.papar = v; render(); };
+  window.lihat = function (id) { st.id = id; st.view = 'profil'; render(); };
+
+  // ---------- Borang murid ----------
+  function bukaDrafBaharu() {
+    return { id: null, nama: '', mykid: '', sijilKelahiran: '', tarikhLahir: '', jantina: '', agama: '', agamaLain: '', bangsa: '', bangsaLain: '', bangsaSebenar: '', alamat: '', tarikhMulaBersekolah: '', tahunPersekolahan: String(new Date().getFullYear()), statusMurid: 'Aktif', tarikhKeluar: '', nota: '', penjaga: [], pendapatan: '', tanggungan: '', statusYatim: 'Tidak yatim', kecemasan: { nama: '', hubungan: '', telefon: '' }, kesihatan: { alahan: '', keadaan: '', ubat: '', catatan: '' }, anakTunggal: false, adik: [], pemandu: [], kenderaan: [] };
+  }
+  function bukaDrafSunting(m) {
+    var d = bukaDrafBaharu();
+    for (var k in d) if (m[k] !== undefined) d[k] = m[k];
+    d.id = m.id;
+    d.penjaga = (m.penjaga || []).map(function (p) { return Object.assign({}, p); });
+    d.statusMurid = m.statusMurid || 'Aktif';
+    d.tarikhKeluar = m.tarikhKeluar || '';
+    d.kecemasan = Object.assign({ nama: '', hubungan: '', telefon: '' }, m.kecemasan || {});
+    d.kesihatan = Object.assign({ alahan: '', keadaan: '', ubat: '', catatan: '' }, m.kesihatan || {});
+    d.anakTunggal = !!m.anakTunggal;
+    d.adik = (m.adik || []).map(function (x) { return Object.assign({}, x); });
+    d.pemandu = (m.pemandu || []).map(function (x) { return Object.assign({}, x); });
+    d.kenderaan = (m.kenderaan || []).map(function (x) { return Object.assign({}, x); });
+    return d;
+  }
+  function pilihanJantina(d) {
+    var auto = jantinaDariMyKid(d.mykid);
+    var html = '<select id="f-jantina" onchange="lainLain(this)"' + (auto ? ' disabled' : '') + '><option value="">-- pilih --</option>' + opsi(JANTINA, auto || d.jantina) + '</select>';
+    return html + '<div class="kecil">' + (auto ? 'Diambil automatik daripada digit terakhir No. MyKid (ganjil = Lelaki, genap = Perempuan).' : 'Pilih secara manual jika tiada No. MyKid.') + '</div>';
+  }
+  function paparBorang() {
+    var d = st.draf || (st.draf = bukaDrafBaharu());
+    var t = d.id ? 'Sunting murid' : 'Tambah murid';
+    var pj = (d.penjaga || []).map(function (p, i) { return barisPenjaga(p, i); }).join('');
+    return '<h2>' + t + '</h2>' +
+      '<h3>Nota: Maklumat murid</h3>' +
+      '<div class="medan"><label>Nama murid (wajib)</label><input id="f-nama" value="' + esc(d.nama) + '">' + ralat('nama') + '</div>' +
+      '<div class="medan"><label>No. MyKid (pilihan, 000000-00-0000)</label><input id="f-mykid" inputmode="numeric" oninput="formatMyKidInput(this)" value="' + esc(d.mykid) + '">' + ralat('mykid') + '</div>' +
+      '<div class="medan"><label>No. Sijil Kelahiran (pilihan)</label><input id="f-sijilKelahiran" value="' + esc(d.sijilKelahiran) + '"></div>' +
+      '<div class="medan"><label>Tarikh lahir (wajib)</label><input type="date" id="f-tarikhLahir" value="' + esc(d.tarikhLahir) + '">' + ralat('tarikhLahir') + '</div>' +
+      '<div class="medan"><label>Jantina (wajib)</label>' + pilihanJantina(d) + ralat('jantina') + '</div>' +
+      '<div class="medan"><label>Agama (wajib)</label><select id="f-agama" onchange="lainLain(this)"><option value="">-- pilih --</option>' + opsi(AGAMA, d.agama) + '</select>' +
+      '<input id="f-agamaLain" placeholder="Nyatakan agama (jika Lain-lain)" value="' + esc(d.agamaLain) + '" style="margin-top:4px;' + (d.agama === 'Lain-lain' ? '' : 'display:none') + '">' + ralat('agama') + '</div>' +
+      '<div class="medan"><label>Bangsa (wajib)</label><select id="f-bangsa" onchange="lainLain(this)"><option value="">-- pilih --</option>' + opsi(BANGSA, d.bangsa) + '</select>' +
+      '<input id="f-bangsaLain" placeholder="Nyatakan bangsa (jika Lain-lain)" value="' + esc(d.bangsaLain) + '" style="margin-top:4px;' + (d.bangsa === 'Lain-lain' ? '' : 'display:none') + '">' + ralat('bangsa') + '</div>' +
+      '<div class="medan"><label>Etnik (pilihan, contoh: Iban, Melanau, Bidayuh, Kadazan)</label><input id="f-bangsaSebenar" value="' + esc(d.bangsaSebenar) + '"></div>' +
+      '<div class="medan"><label>Alamat (pilihan)</label><textarea id="f-alamat">' + esc(d.alamat) + '</textarea></div>' +
+      '<div class="medan"><label>Tarikh mula bersekolah (pilihan)</label><input type="date" id="f-tarikhMulaBersekolah" value="' + esc(d.tarikhMulaBersekolah) + '">' + ralat('tarikhMulaBersekolah') + '</div>' +
+      '<div class="medan"><label>Tahun persekolahan (wajib)</label><input id="f-tahunPersekolahan" value="' + esc(d.tahunPersekolahan) + '">' + ralat('tahunPersekolahan') + '</div>' +
+      '<div class="medan"><label>Status murid (wajib)</label><select id="f-statusMurid">' + opsi(STATUS, d.statusMurid) + '</select></div>' +
+      '<div class="medan"><label>Tarikh berpindah atau keluar (wajib jika status bukan Aktif)</label><input type="date" id="f-tarikhKeluar" value="' + esc(d.tarikhKeluar) + '">' + ralat('tarikhKeluar') + '</div>' +
+      '<div class="medan"><label>Nota (pilihan)</label><textarea id="f-nota">' + esc(d.nota) + '</textarea></div>' +
+      '<h3>Ibu bapa dan penjaga</h3>' +
+      '<div class="kecil">Sekurang-kurangnya satu penjaga mesti ada nama dan telefon yang sah. Hanya satu Ibu dan satu Bapa. Pekerjaan wajib diisi bagi setiap penjaga (tulis Tiada jika tiada).</div>' +
+      ralat('penjaga') + '<div id="senaraiPj">' + pj + '</div>' +
+      '<button class="sekunder" onclick="tambahPenjaga()">+ Tambah penjaga</button>' +
+      seksyenBaharu(d) +
+      '<div class="baris"><button onclick="simpanMurid()">Simpan</button><button class="sekunder" onclick="batalBorang()">Batal</button></div>';
+  }
+  window.lainLain = function (el) {
+    var id = el.id === 'f-agama' ? 'f-agamaLain' : (el.id === 'f-bangsa' ? 'f-bangsaLain' : null);
+    if (id) document.getElementById(id).style.display = el.value === 'Lain-lain' ? '' : 'none';
+  };
+  window.formatMyKidInput = function (el) {
+    el.value = formatMyKid(el.value);
+    var j = jantinaDariMyKid(el.value);
+    var sel = document.getElementById('f-jantina');
+    if (j) { sel.value = j; sel.disabled = true; } else { sel.disabled = false; }
+  };
+  function seksyenBaharu(d) {
+    var kec = d.kecemasan || {}, kes = d.kesihatan || {};
+    return '<h3>Pendapatan dan tanggungan</h3>' +
+      '<div class="medan"><label>Anggaran pendapatan isi rumah sebulan (wajib)</label><select id="f-pendapatan"><option value="">-- pilih --</option>' + opsi(PENDAPATAN, d.pendapatan) + '</select>' + ralat('pendapatan') + '</div>' +
+      '<div class="medan"><label>Jumlah tanggungan ibu bapa / penjaga (pilihan)</label><input id="f-tanggungan" inputmode="numeric" value="' + esc(d.tanggungan) + '">' + ralat('tanggungan') + '</div>' +
+      '<div class="medan"><label>Status anak</label><select id="f-statusYatim">' + opsi(STATUS_YATIM, d.statusYatim) + '</select></div>' +
+      '<h3>Kontak kecemasan (pilihan)</h3>' +
+      '<div class="kecil">Jika diisi, nama, hubungan dan telefon wajib diisi.</div>' +
+      '<div class="medan"><label>Nama</label><input id="f-kec-nama" value="' + esc(kec.nama) + '"></div>' +
+      '<div class="medan"><label>Hubungan</label><input id="f-kec-hub" value="' + esc(kec.hubungan) + '"></div>' +
+      '<div class="medan"><label>Telefon</label><input id="f-kec-tel" value="' + esc(kec.telefon) + '">' + ralat('kecemasan') + '</div>' +
+      '<h3>Maklumat kesihatan</h3>' +
+      '<div class="medan"><label>Alahan (wajib, tulis Tiada jika tiada)</label><input id="f-alahan" value="' + esc(kes.alahan) + '">' + ralat('alahan') + '</div>' +
+      '<div class="medan"><label>Keadaan kesihatan (pilihan)</label><input id="f-keadaan" value="' + esc(kes.keadaan) + '"></div>' +
+      '<div class="medan"><label>Ubat yang diambil (pilihan)</label><input id="f-ubat" value="' + esc(kes.ubat) + '"></div>' +
+      '<div class="medan"><label>Catatan kesihatan lain (pilihan)</label><textarea id="f-catatanKes">' + esc(kes.catatan) + '</textarea></div>' +
+      '<h3>Adik-beradik</h3>' +
+      '<label style="display:block"><input type="checkbox" id="f-anakTunggal" style="width:auto;max-width:none"' + (d.anakTunggal ? ' checked' : '') + '> Anak tunggal</label>' +
+      ralat('adik') +
+      '<div id="senaraiAdik">' + (d.adik || []).map(barisAdik).join('') + '</div>' +
+      '<button class="sekunder" onclick="tambahSenarai(\'adik\')">+ Tambah adik-beradik</button>' +
+      '<h3>Pemandu dan individu yang dibenarkan mengambil murid</h3>' +
+      ralat('pemandu') +
+      '<div id="senaraiPemandu">' + (d.pemandu || []).map(barisPemandu).join('') + '</div>' +
+      '<button class="sekunder" onclick="tambahSenarai(\'pemandu\')">+ Tambah pemandu</button>' +
+      '<h3>Kenderaan yang digunakan untuk hantar dan ambil</h3>' +
+      ralat('kenderaan') +
+      '<div id="senaraiKenderaan">' + (d.kenderaan || []).map(barisKenderaan).join('') + '</div>' +
+      '<button class="sekunder" onclick="tambahSenarai(\'kenderaan\')">+ Tambah kenderaan</button>';
+  }
+  function barisPenjaga(p, i) {
+    return '<div class="pj" data-i="' + i + '" data-id="' + esc(p.id) + '">' +
+      '<div class="medan"><label>Hubungan</label><select class="pj-hub">' + HUBUNGAN.map(function (h) { return '<option' + (p.hubungan === h ? ' selected' : '') + '>' + h + '</option>'; }).join('') + '</select></div>' +
+      '<div class="medan"><label>Nama</label><input class="pj-nama" value="' + esc(p.nama) + '"></div>' +
+      '<div class="medan"><label>Telefon (contoh 012-3456789)</label><input class="pj-tel" value="' + esc(p.telefon) + '"></div>' +
+      '<div class="medan"><label>Telefon alternatif (pilihan)</label><input class="pj-alt" value="' + esc(p.telefonAlternatif) + '"></div>' +
+      '<div class="medan"><label>Pekerjaan (wajib, tulis Tiada jika tiada)</label><input class="pj-kerja" value="' + esc(p.pekerjaan) + '"></div>' +
+      '<div class="medan"><label>Alamat jika berbeza (pilihan)</label><input class="pj-alamat" value="' + esc(p.alamatJikaBerbeza) + '"></div>' +
+      '<button class="sekunder bahaya" onclick="buangPenjaga(' + i + ')">Buang penjaga ini</button></div>';
+  }
+  function barisAdik(a, i) {
+    return '<div class="pj brs-adik">' +
+      '<div class="medan"><label>Hubungan</label><select class="ad-hub">' + opsi(HUBUNGAN_ADIK, a.hubungan) + '</select></div>' +
+      '<div class="medan"><label>Nama (pilihan)</label><input class="ad-nama" value="' + esc(a.nama) + '"></div>' +
+      '<div class="medan"><label>Umur (tahun)</label><input class="ad-umur" inputmode="numeric" value="' + esc(a.umur) + '"></div>' +
+      '<div class="medan"><label>Sekolah atau tempat (pilihan)</label><input class="ad-sekolah" value="' + esc(a.sekolah) + '"></div>' +
+      '<button class="sekunder bahaya" onclick="buangSenarai(\'adik\',' + i + ')">Buang</button></div>';
+  }
+  function barisPemandu(p, i) {
+    return '<div class="pj brs-pemandu">' +
+      '<div class="medan"><label>Nama</label><input class="pm-nama" value="' + esc(p.nama) + '"></div>' +
+      '<div class="medan"><label>Hubungan dengan murid</label><input class="pm-hub" value="' + esc(p.hubungan) + '"></div>' +
+      '<div class="medan"><label>Telefon</label><input class="pm-tel" value="' + esc(p.telefon) + '"></div>' +
+      '<button class="sekunder bahaya" onclick="buangSenarai(\'pemandu\',' + i + ')">Buang</button></div>';
+  }
+  function barisKenderaan(k, i) {
+    return '<div class="pj brs-kenderaan">' +
+      '<div class="medan"><label>Jenis kenderaan</label><select class="kd-jenis">' + opsi(JENIS_KENDERAAN, k.jenis) + '</select></div>' +
+      '<div class="medan"><label>Nombor pendaftaran</label><input class="kd-nombor" value="' + esc(k.nombor) + '"></div>' +
+      '<button class="sekunder bahaya" onclick="buangSenarai(\'kenderaan\',' + i + ')">Buang</button></div>';
+  }
+  function bacaSenarai(kelas, fn) {
+    var out = [];
+    document.querySelectorAll('.' + kelas).forEach(function (el) { out.push(fn(el)); });
+    return out;
+  }
+  function kumpulPenjagaDariBorang() {
+    var out = [];
+    document.querySelectorAll('#senaraiPj .pj').forEach(function (el) {
+      out.push({
+        id: el.getAttribute('data-id') || idBaharu('P'),
+        hubungan: el.querySelector('.pj-hub').value,
+        nama: el.querySelector('.pj-nama').value,
+        telefon: el.querySelector('.pj-tel').value,
+        telefonAlternatif: el.querySelector('.pj-alt').value,
+        pekerjaan: el.querySelector('.pj-kerja').value,
+        alamatJikaBerbeza: el.querySelector('.pj-alamat').value
+      });
+    });
+    return out;
+  }
+  function kumpulBorang() {
+    var d = st.draf || {};
+    var ambil = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+    return Object.assign({}, d, {
+      nama: ambil('f-nama').trim(),
+      mykid: ambil('f-mykid').trim(),
+      sijilKelahiran: ambil('f-sijilKelahiran').trim(),
+      tarikhLahir: ambil('f-tarikhLahir'),
+      jantina: ambil('f-jantina'),
+      agama: ambil('f-agama'),
+      agamaLain: ambil('f-agamaLain').trim(),
+      bangsa: ambil('f-bangsa'),
+      bangsaLain: ambil('f-bangsaLain').trim(),
+      bangsaSebenar: ambil('f-bangsaSebenar').trim(),
+      alamat: ambil('f-alamat').trim(),
+      tarikhMulaBersekolah: ambil('f-tarikhMulaBersekolah'),
+      tahunPersekolahan: ambil('f-tahunPersekolahan').trim(),
+      statusMurid: ambil('f-statusMurid') || 'Aktif',
+      tarikhKeluar: ambil('f-tarikhKeluar'),
+      nota: ambil('f-nota').trim(),
+      penjaga: kumpulPenjagaDariBorang(),
+      pendapatan: ambil('f-pendapatan'),
+      tanggungan: ambil('f-tanggungan').trim(),
+      statusYatim: ambil('f-statusYatim') || 'Tidak yatim',
+      kecemasan: { nama: ambil('f-kec-nama').trim(), hubungan: ambil('f-kec-hub').trim(), telefon: ambil('f-kec-tel').trim() },
+      kesihatan: { alahan: ambil('f-alahan').trim(), keadaan: ambil('f-keadaan').trim(), ubat: ambil('f-ubat').trim(), catatan: ambil('f-catatanKes').trim() },
+      anakTunggal: document.getElementById('f-anakTunggal') ? document.getElementById('f-anakTunggal').checked : !!d.anakTunggal,
+      adik: bacaSenarai('brs-adik', function (el) { return { hubungan: el.querySelector('.ad-hub').value, nama: el.querySelector('.ad-nama').value.trim(), umur: el.querySelector('.ad-umur').value.trim(), sekolah: el.querySelector('.ad-sekolah').value.trim() }; }),
+      pemandu: bacaSenarai('brs-pemandu', function (el) { return { nama: el.querySelector('.pm-nama').value.trim(), hubungan: el.querySelector('.pm-hub').value.trim(), telefon: el.querySelector('.pm-tel').value.trim() }; }),
+      kenderaan: bacaSenarai('brs-kenderaan', function (el) { return { jenis: el.querySelector('.kd-jenis').value, nombor: el.querySelector('.kd-nombor').value.trim() }; })
+    });
+  }
+  window.tambahPenjaga = function () {
+    var d = kumpulBorang();
+    d.penjaga.push({ id: idBaharu('P'), hubungan: 'Penjaga', nama: '', telefon: '', telefonAlternatif: '', pekerjaan: '', alamatJikaBerbeza: '' });
+    st.draf = d; render();
+  };
+  window.buangPenjaga = function (i) {
+    var d = kumpulBorang();
+    d.penjaga.splice(i, 1);
+    st.draf = d; render();
+  };
+  window.tambahSenarai = function (jenis) {
+    var d = kumpulBorang();
+    if (jenis === 'adik') d.adik.push({ hubungan: 'Abang', nama: '', umur: '', sekolah: '' });
+    if (jenis === 'pemandu') d.pemandu.push({ nama: '', hubungan: '', telefon: '' });
+    if (jenis === 'kenderaan') d.kenderaan.push({ jenis: 'Kereta', nombor: '' });
+    st.draf = d; render();
+  };
+  window.buangSenarai = function (jenis, i) {
+    var d = kumpulBorang();
+    d[jenis].splice(i, 1);
+    st.draf = d; render();
+  };
+  window.batalBorang = function () { st.draf = null; st.errs = {}; st.view = 'senarai'; render(); };
+
+  function sahkan(d) {
+    var e = {};
+    var hariIni = hariIsoKini();
+    if (!d.nama) e.nama = 'Nama murid wajib diisi.';
+    if (d.mykid && !/^\d{6}-\d{2}-\d{4}$/.test(d.mykid)) e.mykid = 'Format mesti 000000-00-0000.';
+    else if (d.mykid && data.students.some(function (m) { return !m.dipadam && m.mykid === d.mykid && m.id !== d.id; })) e.mykid = 'No. MyKid ini sudah wujud bagi murid lain.';
+    if (!d.tarikhLahir) e.tarikhLahir = 'Tarikh lahir wajib diisi.';
+    else if (d.tarikhLahir > hariIni) e.tarikhLahir = 'Tarikh lahir tidak boleh pada masa depan.';
+    if (JANTINA.indexOf(d.jantina) === -1) e.jantina = 'Pilih jantina.';
+    if (!d.agama) e.agama = 'Pilih agama.';
+    else if (d.agama === 'Lain-lain' && !d.agamaLain) e.agama = 'Nyatakan agama.';
+    if (!d.bangsa) e.bangsa = 'Pilih bangsa.';
+    else if (d.bangsa === 'Lain-lain' && !d.bangsaLain) e.bangsa = 'Nyatakan bangsa.';
+    if (!/^\d{4}$/.test(d.tahunPersekolahan)) e.tahunPersekolahan = 'Tahun persekolahan mesti 4 digit.';
+    if (STATUS.indexOf(d.statusMurid) === -1) e.statusMurid = 'Status tidak sah.';
+    if (d.statusMurid !== 'Aktif' && !d.tarikhKeluar) e.tarikhKeluar = 'Wajib jika status bukan Aktif.';
+    if (d.tarikhMulaBersekolah && d.tarikhLahir && d.tarikhMulaBersekolah < d.tarikhLahir) e.tarikhMulaBersekolah = 'Tarikh mula bersekolah tidak boleh sebelum tarikh lahir.';
+    if (d.tarikhKeluar && d.tarikhMulaBersekolah && d.tarikhKeluar < d.tarikhMulaBersekolah) e.tarikhKeluar = 'Tarikh keluar tidak boleh sebelum tarikh mula bersekolah.';
+    if (!d.pendapatan) e.pendapatan = 'Pilih anggaran pendapatan isi rumah.';
+    if (d.tanggungan !== '' && !/^\d{1,2}$/.test(String(d.tanggungan))) e.tanggungan = 'Masukkan nombor bulat 0 atau lebih.';
+    var bil = { Ibu: 0, Bapa: 0 }, adaSah = false, ralatPj = [];
+    d.penjaga.forEach(function (p) {
+      if (HUBUNGAN.indexOf(p.hubungan) === -1) ralatPj.push('Hubungan penjaga tidak sah.');
+      if (p.hubungan === 'Ibu' || p.hubungan === 'Bapa') bil[p.hubungan]++;
+      if (!String(p.pekerjaan || '').trim()) ralatPj.push('Pekerjaan ' + (p.nama || 'penjaga') + ' wajib diisi. Tulis Tiada jika tiada.');
+      if (!p.nama.trim()) ralatPj.push('Nama penjaga wajib diisi.');
+      else if (!telefonSah(p.telefon)) ralatPj.push('Telefon ' + p.nama + ' tidak sah.');
+      else adaSah = true;
+      if (p.telefonAlternatif && !telefonSah(p.telefonAlternatif)) ralatPj.push('Telefon alternatif ' + p.nama + ' tidak sah.');
+    });
+    if (bil.Ibu > 1) ralatPj.push('Hanya satu rekod Ibu dibenarkan.');
+    if (bil.Bapa > 1) ralatPj.push('Hanya satu rekod Bapa dibenarkan.');
+    if (!adaSah) ralatPj.push('Sekurang-kurangnya satu penjaga mesti ada nama dan telefon yang sah.');
+    if (ralatPj.length) e.penjaga = ralatPj.join(' ');
+    var kec = d.kecemasan || {};
+    if (kec.nama || kec.hubungan || kec.telefon) {
+      if (!kec.nama || !kec.hubungan || !telefonSah(kec.telefon)) e.kecemasan = 'Lengkapkan nama, hubungan dan telefon yang sah, atau kosongkan bahagian ini.';
+    }
+    if (!d.kesihatan.alahan) e.alahan = 'Alahan wajib diisi. Tulis Tiada jika tiada alahan.';
+    if (!d.anakTunggal && !d.adik.length) e.adik = 'Tambah sekurang-kurangnya seorang adik-beradik, atau tandakan Anak tunggal.';
+    if (d.adik.some(function (a) { return !a.hubungan; })) e.adik = (e.adik ? e.adik + ' ' : '') + 'Pilih hubungan bagi setiap adik-beradik.';
+    if (!d.pemandu.length) e.pemandu = 'Tambah sekurang-kurangnya seorang pemandu atau individu yang dibenarkan mengambil murid.';
+    else if (d.pemandu.some(function (p) { return !p.nama || !p.hubungan || !telefonSah(p.telefon); })) e.pemandu = 'Lengkapkan nama, hubungan dan telefon yang sah bagi setiap pemandu.';
+    if (!d.kenderaan.length) e.kenderaan = 'Tambah sekurang-kurangnya satu kenderaan.';
+    else if (d.kenderaan.some(function (k) { return !k.jenis || !k.nombor; })) e.kenderaan = 'Lengkapkan jenis dan nombor pendaftaran bagi setiap kenderaan.';
+    return e;
+  }
+  window.simpanMurid = function () {
+    var d = kumpulBorang();
+    d.penjaga = d.penjaga.map(function (p) { return Object.assign(p, { telefon: normTelefon(p.telefon), telefonAlternatif: normTelefon(p.telefonAlternatif) }); });
+    d.kecemasan.telefon = normTelefon(d.kecemasan.telefon);
+    d.pemandu = d.pemandu.map(function (p) { return Object.assign(p, { telefon: normTelefon(p.telefon) }); });
+    st.draf = d;
+    st.errs = sahkan(d);
+    if (Object.keys(st.errs).length) { render(); window.scrollTo(0, 0); return; }
+    var rekod = {
+      id: d.id || idBaharu('MR'), nama: d.nama, mykid: d.mykid, sijilKelahiran: d.sijilKelahiran,
+      tarikhLahir: d.tarikhLahir, jantina: d.jantina,
+      agama: d.agama, agamaLain: d.agama === 'Lain-lain' ? d.agamaLain : '',
+      bangsa: d.bangsa, bangsaLain: d.bangsa === 'Lain-lain' ? d.bangsaLain : '',
+      bangsaSebenar: d.bangsaSebenar, alamat: d.alamat, nota: d.nota,
+      tarikhMulaBersekolah: d.tarikhMulaBersekolah, tahunPersekolahan: d.tahunPersekolahan,
+      statusMurid: d.statusMurid, tarikhKeluar: d.statusMurid === 'Aktif' ? '' : d.tarikhKeluar,
+      penjaga: d.penjaga, pendapatan: d.pendapatan, tanggungan: d.tanggungan, statusYatim: d.statusYatim,
+      kecemasan: d.kecemasan, kesihatan: d.kesihatan, anakTunggal: d.anakTunggal,
+      adik: d.adik, pemandu: d.pemandu, kenderaan: d.kenderaan,
+      dipadam: false, dipadamPada: '', dikemaskini: tarikhKini()
+    };
+    if (d.id) {
+      var i = data.students.findIndex(function (m) { return m.id === d.id; });
+      rekod.dipadam = data.students[i].dipadam; rekod.dipadamPada = data.students[i].dipadamPada;
+      data.students[i] = rekod;
+      st.mesej = 'Rekod dikemas kini.';
+    } else {
+      data.students.push(rekod);
+      st.mesej = 'Murid baharu disimpan.';
+    }
+    simpan();
+    st.draf = null; st.errs = {}; st.id = rekod.id; st.view = 'profil';
+    render();
+  };
+
+  // ---------- Profil (boleh dicetak) ----------
+  function paparProfil() {
+    var m = murid(st.id);
+    if (!m) { st.view = 'senarai'; return paparSenarai(); }
+    var pj = (m.penjaga || []).map(function (p) {
+      return '<tr><td>' + esc(p.hubungan) + '</td><td>' + esc(p.nama) + '</td><td>' + esc(p.telefon) +
+        (p.telefonAlternatif ? ' / ' + esc(p.telefonAlternatif) : '') + '</td><td>' + esc(p.pekerjaan) + '</td><td>' + esc(p.alamatJikaBerbeza) + '</td></tr>';
+    }).join('') || '<tr><td colspan="5">Tiada penjaga direkodkan.</td></tr>';
+    var agama = m.agama === 'Lain-lain' ? (m.agamaLain || 'Lain-lain') : m.agama;
+    var bangsa = m.bangsa === 'Lain-lain' ? (m.bangsaLain || 'Lain-lain') : m.bangsa;
+    var butang = m.dipadam
+      ? '<button onclick="pulihMurid(\'' + m.id + '\')">Pulih rekod</button>' +
+        '<button class="bahaya" onclick="padamKekal(\'' + m.id + '\')">Padam kekal</button>'
+      : '<button onclick="sunting(\'' + m.id + '\')">Sunting</button>' +
+        '<button class="bahaya" onclick="padamMurid(\'' + m.id + '\')">Padam (boleh dipulihkan)</button>';
+    return '<div class="baris tiada-cetak">' +
+      '<button class="sekunder" onclick="tukar(\'senarai\')">Kembali</button>' + butang +
+      '<button class="sekunder" onclick="window.print()">Cetak PDF</button></div>' +
+      (m.dipadam ? '<div class="amaran">Rekod ini telah dipadam pada ' + esc(m.dipadamPada) + '.</div>' : '') +
+      '<h2>Profil murid</h2>' +
+      '<table>' +
+      '<tr><th style="width:35%">Nama murid</th><td>' + esc(m.nama) + '</td></tr>' +
+      '<tr><th>No. MyKid</th><td>' + esc(m.mykid) + '</td></tr>' +
+      '<tr><th>No. Sijil Kelahiran</th><td>' + esc(m.sijilKelahiran) + '</td></tr>' +
+      '<tr><th>Tarikh lahir</th><td>' + esc(tarikhPapar(m.tarikhLahir)) + ' (' + esc(umur(m.tarikhLahir)) + ')</td></tr>' +
+      '<tr><th>Jantina</th><td>' + esc(m.jantina) + '</td></tr>' +
+      '<tr><th>Agama</th><td>' + esc(agama) + '</td></tr>' +
+      '<tr><th>Bangsa</th><td>' + esc(bangsa) + '</td></tr>' +
+      '<tr><th>Etnik</th><td>' + esc(m.bangsaSebenar) + '</td></tr>' +
+      '<tr><th>Alamat</th><td>' + esc(m.alamat) + '</td></tr>' +
+      '<tr><th>Tahun persekolahan</th><td>' + esc(m.tahunPersekolahan) + '</td></tr>' +
+      '<tr><th>Tarikh mula bersekolah</th><td>' + esc(tarikhPapar(m.tarikhMulaBersekolah)) + '</td></tr>' +
+      '<tr><th>Status murid</th><td>' + esc(m.statusMurid || 'Aktif') + (m.tarikhKeluar ? ' (' + esc(tarikhPapar(m.tarikhKeluar)) + ')' : '') + '</td></tr>' +
+      '<tr><th>Nota</th><td>' + esc(m.nota) + '</td></tr>' +
+      '</table>' +
+      '<h3>Ibu bapa dan penjaga</h3>' +
+      '<div class="jadual"><table><tr><th>Hubungan</th><th>Nama</th><th>Telefon</th><th>Pekerjaan</th><th>Alamat jika berbeza</th></tr>' + pj + '</table></div>' +
+      '<h3>Pendapatan dan tanggungan</h3>' +
+      '<table><tr><th style="width:35%">Anggaran pendapatan isi rumah</th><td>' + esc(m.pendapatan) + '</td></tr>' +
+      '<tr><th>Jumlah tanggungan ibu bapa / penjaga</th><td>' + esc(m.tanggungan) + '</td></tr>' +
+      '<tr><th>Status anak</th><td>' + esc(m.statusYatim || 'Tidak yatim') + '</td></tr></table>' +
+      '<h3>Kontak kecemasan</h3>' +
+      (m.kecemasan && (m.kecemasan.nama || m.kecemasan.telefon) ? '<table><tr><th>Nama</th><th>Hubungan</th><th>Telefon</th></tr><tr><td>' + esc(m.kecemasan.nama) + '</td><td>' + esc(m.kecemasan.hubungan) + '</td><td>' + esc(m.kecemasan.telefon) + '</td></tr></table>' : '<div class="kecil">Tidak diisi.</div>') +
+      '<h3>Maklumat kesihatan</h3>' +
+      '<table><tr><th style="width:35%">Alahan</th><td>' + esc(m.kesihatan ? m.kesihatan.alahan : '') + '</td></tr>' +
+      '<tr><th>Keadaan kesihatan</th><td>' + esc(m.kesihatan ? m.kesihatan.keadaan : '') + '</td></tr>' +
+      '<tr><th>Ubat yang diambil</th><td>' + esc(m.kesihatan ? m.kesihatan.ubat : '') + '</td></tr>' +
+      '<tr><th>Catatan lain</th><td>' + esc(m.kesihatan ? m.kesihatan.catatan : '') + '</td></tr></table>' +
+      '<h3>Adik-beradik</h3>' +
+      (m.anakTunggal ? '<div class="kecil">Anak tunggal.</div>' : '<div class="jadual"><table><tr><th>Hubungan</th><th>Nama</th><th>Umur</th><th>Sekolah atau tempat</th></tr>' + (m.adik || []).map(function (a) { return '<tr><td>' + esc(a.hubungan) + '</td><td>' + esc(a.nama) + '</td><td>' + esc(a.umur) + '</td><td>' + esc(a.sekolah) + '</td></tr>'; }).join('') + '</table></div>') +
+      '<h3>Pemandu dan individu yang dibenarkan mengambil murid</h3>' +
+      '<table><tr><th>Nama</th><th>Hubungan</th><th>Telefon</th></tr>' + (m.pemandu || []).map(function (p) { return '<tr><td>' + esc(p.nama) + '</td><td>' + esc(p.hubungan) + '</td><td>' + esc(p.telefon) + '</td></tr>'; }).join('') + '</table>' +
+      '<h3>Kenderaan yang digunakan</h3>' +
+      '<table><tr><th>Jenis</th><th>Nombor pendaftaran</th></tr>' + (m.kenderaan || []).map(function (k) { return '<tr><td>' + esc(k.jenis) + '</td><td>' + esc(k.nombor) + '</td></tr>'; }).join('') + '</table>' +
+      '<div class="cetak-tarikh">Dicetak pada ' + esc(tarikhKini()) + '</div>';
+  }
+  window.sunting = function (id) { var m = murid(id); st.draf = bukaDrafSunting(m); st.errs = {}; st.view = 'borang'; render(); };
+  window.padamMurid = function (id) {
+    if (!confirm('Padam rekod ini? Rekod boleh dipulihkan.')) return;
+    var m = murid(id); m.dipadam = true; m.dipadamPada = tarikhKini(); simpan();
+    st.mesej = 'Rekod dipadam (boleh dipulihkan).'; render();
+  };
+  window.pulihMurid = function (id) {
+    var m = murid(id); m.dipadam = false; m.dipadamPada = ''; simpan();
+    st.mesej = 'Rekod dipulihkan.'; render();
+  };
+  window.padamKekal = function (id) {
+    var m = murid(id);
+    var t = prompt('Padam kekal rekod "' + m.nama + '"? Tindakan ini TIDAK boleh dibatalkan. Ketik PADAM untuk mengesahkan.');
+    if (t !== 'PADAM') { st.mesej = 'Padam kekal dibatalkan.'; return render(); }
+    data.students = data.students.filter(function (x) { return x.id !== id; });
+    simpan();
+    st.view = 'senarai'; st.id = null; st.mesej = 'Rekod dipadam kekal.'; render();
+  };
+
+  // ---------- Laporan (PDF melalui cetakan, Excel melalui CSV) ----------
+  function paparLaporan() {
+    var aktif = data.students.filter(function (m) { return !m.dipadam; });
+    var kira = function (x) { return aktif.filter(function (m) { return (m.statusMurid || 'Aktif') === x; }).length; };
+    return '<h2>Laporan</h2>' +
+      '<div class="maklumat">Rekod yang dipadam tidak disertakan. Jumlah: Aktif ' + kira('Aktif') + ', Berpindah ' + kira('Berpindah') + ', Keluar ' + kira('Keluar') + '.</div>' +
+      '<div class="medan"><label>Status</label><select id="lap">' +
+      ['Semua', 'Aktif', 'Berpindah', 'Keluar'].map(function (x) { return '<option>' + x + '</option>'; }).join('') + '</select></div>' +
+      '<div class="medan"><label>Umur</label><select id="lapUmur">' +
+      ['Semua', '5 tahun', '6 tahun', 'Lain-lain umur'].map(function (x) { return '<option value="' + x + '">' + (x === 'Semua' ? 'Semua umur' : x) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="baris"><button onclick="cetakLaporan()">Cetak PDF</button><button class="sekunder" onclick="muatTurunExcel()">Muat turun Excel (.csv)</button></div>' +
+      '<div class="kecil">Laporan disusun mengikut umur (5 tahun, 6 tahun, lain-lain), kemudian nama A hingga Z. Excel dijana sebagai fail .csv (UTF-8) yang dibuka terus dengan Excel.</div>' +
+      '<div id="laporan"></div>';
+  }
+  function senaraiLaporan() {
+    var s = document.getElementById('lap') ? document.getElementById('lap').value : 'Semua';
+    var u = document.getElementById('lapUmur') ? document.getElementById('lapUmur').value : 'Semua';
+    return data.students.filter(function (m) { return !m.dipadam && padan(m, s, u, ''); });
+  }
+  window.cetakLaporan = function () {
+    var kump = kumpulanSusun(senaraiLaporan());
+    if (!kump.length) { document.getElementById('laporan').innerHTML = '<div class="maklumat">Tiada rekod untuk pilihan ini.</div>'; return; }
+    var html = kump.map(function (k, idx) {
+      var baris = k.ahli.map(function (m, i) {
+        var ibu = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Ibu'; })[0];
+        var bapa = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Bapa'; })[0];
+        return '<tr><td>' + (i + 1) + '</td><td>' + esc(m.nama) + '</td><td>' + esc(m.jantina) + '</td><td>' + esc(m.bangsa) +
+          '</td><td>' + esc(m.statusMurid || 'Aktif') + '</td><td>' + esc(ibu ? ibu.telefon : '') + '</td><td>' + esc(bapa ? bapa.telefon : '') + '</td></tr>';
+      }).join('');
+      return '<div style="' + (idx ? 'page-break-before:always;' : '') + '"><h2>Senarai murid - ' + esc(k.label) + ' (' + k.ahli.length + ')</h2>' +
+        '<table><tr><th>Bil</th><th>Nama</th><th>Jantina</th><th>Bangsa</th><th>Status</th><th>Telefon ibu</th><th>Telefon bapa</th></tr>' + baris + '</table></div>';
+    }).join('') + '<div class="cetak-tarikh">Dicetak pada ' + esc(tarikhKini()) + '</div>';
+    document.getElementById('laporan').innerHTML = html;
+    window.print();
+  };
+  window.muatTurunExcel = function () {
+    var kump = kumpulanSusun(senaraiLaporan());
+    var lajur = ['Bil', 'Umur', 'Nama', 'Jantina', 'Bangsa', 'Etnik', 'Agama', 'Tarikh lahir', 'Status', 'Tarikh keluar', 'Telefon ibu', 'Telefon bapa', 'Alamat'];
+    var petak = function (v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; };
+    var baris = [];
+    kump.forEach(function (k) {
+      k.ahli.forEach(function (m, i) {
+        var ibu = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Ibu'; })[0];
+        var bapa = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Bapa'; })[0];
+        baris.push([i + 1, k.label, m.nama, m.jantina, m.bangsa === 'Lain-lain' ? m.bangsaLain : m.bangsa, m.bangsaSebenar,
+          m.agama === 'Lain-lain' ? m.agamaLain : m.agama, tarikhPapar(m.tarikhLahir), m.statusMurid || 'Aktif',
+          tarikhPapar(m.tarikhKeluar), ibu ? ibu.telefon : '', bapa ? bapa.telefon : '', m.alamat].map(petak).join(','));
+      });
+    });
+    var kandungan = '﻿' + lajur.map(petak).join(',') + '\r\n' + baris.join('\r\n') + '\r\n';
+    muatTurun('senarai-murid.csv', new Blob([kandungan], { type: 'text/csv;charset=utf-8' }));
+  };
+  function muatTurun(nama, blob) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = nama;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  // ---------- Sandaran (disulitkan), pulih dan tukar kata laluan ----------
+  function paparSandaran() {
+    return '<h2>Sandaran, pulih dan kata laluan</h2>' +
+      '<div class="maklumat">Jumlah rekod dalam peranti ini: ' + data.students.length + ' (termasuk yang dipadam: ' + data.students.filter(function (m) { return m.dipadam; }).length + ').</div>' +
+      '<h3>Eksport sandaran (disulitkan)</h3>' +
+      '<div class="medan"><label>Kata laluan semasa (untuk mengesahkan dan menyulitkan fail)</label><input type="password" id="sd-kata"></div>' +
+      '<div class="baris"><button onclick="eksportSandaran()">Eksport fail sandaran</button></div>' +
+      '<div class="kecil">Fail sandaran disulitkan dengan kata laluan ini. Ia tidak boleh dibaca tanpa kata laluan.</div>' +
+      '<h3>Pulih dari fail sandaran</h3>' +
+      '<div class="amaran">Mod TAMBAH sahaja. Rekod sedia ada tidak dipadam atau ditulis ganti. Rekod dengan ID yang sama akan dilangkau.</div>' +
+      '<div class="medan"><label>Fail sandaran</label><input type="file" id="fail" accept=".json,application/json"></div>' +
+      '<div class="medan"><label>Kata laluan fail sandaran</label><input type="password" id="pl-kata"></div>' +
+      '<div class="baris"><button onclick="pulihSandaran()">Pulih (TAMBAH)</button></div>' +
+      '<div id="laporanPulih"></div>' +
+      '<h3>Tukar kata laluan</h3>' +
+      '<div class="amaran">Jika kata laluan lupa, data TIDAK boleh dipulihkan.</div>' +
+      '<div class="medan"><label>Kata laluan semasa</label><input type="password" id="tk-lama"></div>' +
+      '<div class="medan"><label>Kata laluan baharu (minimum ' + KATA_MIN + ' aksara, huruf dan nombor)</label><input type="password" id="tk-baru"></div>' +
+      '<div class="medan"><label>Sahkan kata laluan baharu</label><input type="password" id="tk-baru2"></div>' +
+      '<div class="baris"><button onclick="tukarKataLaluan()">Tukar kata laluan</button></div>' +
+      '<div id="tkLog" class="ralat"></div>';
+  }
+  window.eksportSandaran = async function () {
+    var kata = document.getElementById('sd-kata').value;
+    var out = document.getElementById('tkLog');
+    if (!(await sahkanKata(kata))) { document.getElementById('laporanPulih').innerHTML = '<div class="ralat">Kata laluan semasa salah.</div>'; return; }
+    var salt = rawSalt();
+    var k = await kunciDari(kata, salt, ITER);
+    var r = await sulit(k, JSON.stringify({ masa: new Date().toISOString(), data: { students: data.students } }));
+    var bungkus = JSON.stringify({ versi: 2, iter: ITER, salt: salt, iv: r.iv, ct: r.ct }, null, 1);
+    var tarikh = new Date().toISOString().slice(0, 10);
+    muatTurun('sandaran-rekod-murid-' + tarikh + '.json', new Blob([bungkus], { type: 'application/json' }));
+    document.getElementById('sd-kata').value = '';
+  };
+  window.pulihSandaran = async function () {
+    var fail = document.getElementById('fail').files[0];
+    var kata = document.getElementById('pl-kata').value;
+    var out = document.getElementById('laporanPulih');
+    if (!fail) { out.innerHTML = '<div class="ralat">Pilih fail sandaran dahulu.</div>'; return; }
+    try {
+      var bungkus = JSON.parse(await fail.text());
+      var masuk;
+      if (bungkus.versi === 2) {
+        var k = await kunciDari(kata, bungkus.salt, bungkus.iter);
+        var teks = await nyahSulit(k, bungkus.iv, bungkus.ct);
+        masuk = (JSON.parse(teks).data || {}).students || [];
+      } else {
+        throw new Error('Format fail tidak disokong. Hanya fail sandaran disulitkan (versi 2) dibenarkan.');
+      }
+      var sedia = {}; data.students.forEach(function (m) { sedia[m.id] = true; });
+      var tambah = 0, dilangkau = 0;
+      masuk.forEach(function (m) {
+        if (sedia[m.id]) { dilangkau++; return; }
+        data.students.push(m); tambah++;
+      });
+      await simpan();
+      out.innerHTML = '<div class="maklumat">Ditambah: ' + tambah + ' murid. Dilangkau (ID sama): ' + dilangkau + '.</div>';
+    } catch (e) {
+      out.innerHTML = '<div class="ralat">Gagal: kata laluan fail salah atau fail rosak. ' + esc(e.message) + '</div>';
+    }
+  };
+  window.tukarKataLaluan = async function () {
+    var lama = document.getElementById('tk-lama').value;
+    var baru = document.getElementById('tk-baru').value;
+    var baru2 = document.getElementById('tk-baru2').value;
+    var out = document.getElementById('tkLog');
+    if (!/^[A-Za-z0-9]+$/.test(baru) || baru.length < KATA_MIN) { out.textContent = 'Kata laluan baharu minimum ' + KATA_MIN + ' aksara, huruf dan nombor sahaja.'; return; }
+    if (baru !== baru2) { out.textContent = 'Kata laluan baharu tidak sama.'; return; }
+    if (!(await tukarKata(lama, baru))) { out.textContent = 'Kata laluan semasa salah.'; return; }
+    st.mesej = 'Kata laluan berjaya ditukar.'; render();
+  };
+
+  // ---------- Mula ----------
+  render();
+})();
+</script>
+</body>
+</html>
