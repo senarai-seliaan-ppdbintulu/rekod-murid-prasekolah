@@ -110,6 +110,44 @@
     .kepala .kelas { font-size:17px; }
   }
 
+  /* ---------- Paparan telefon (skrin sempit) ---------- */
+  @media (max-width:600px) {
+    header { padding:10px 12px; gap:6px; }
+    .tajuk-wrap { gap:8px; width:100%; }
+    .logo-header { width:40px; height:40px; }
+    header h1 { font-size:15px; line-height:1.25; }
+    header .sub { font-size:12px; margin-top:1px; }
+    nav { flex-wrap:nowrap; overflow-x:auto; width:100%; gap:6px; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+    nav button { flex:0 0 auto; padding:7px 12px; font-size:13px; border-radius:16px; white-space:nowrap; }
+    main { padding:10px; }
+    h2 { font-size:17px; margin:2px 0 10px; }
+    h3 { font-size:14px; margin:14px 0 6px; }
+    .kad-grid { gap:8px; margin:4px 0 12px; }
+    .kad .label { font-size:11px; }
+    .kad .nilai { font-size:22px; }
+    .amaran, .maklumat { font-size:13px; padding:8px; margin:8px 0; }
+    .kecil { font-size:13px; }
+    .senarai-murid, .senarai-murid tbody { display:block; width:100%; }
+    .senarai-murid tr:first-child { display:none; }
+    .senarai-murid tr { display:block; background:#fff; border:1px solid #e6ebf1; border-radius:10px; margin:8px 0; padding:8px 10px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+    .senarai-murid td { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; border:none; padding:4px 0; font-size:14px; background:transparent !important; text-align:right; }
+    .senarai-murid td::before { content:attr(data-label); font-weight:bold; color:#1f4e79; text-align:left; flex:0 0 38%; }
+    .senarai-murid td.nama-murid { font-size:16px; font-weight:bold; justify-content:flex-start; text-align:left; padding-bottom:6px; }
+    .senarai-murid td.nama-murid::before { content:none; }
+    .senarai-murid td.tindakan { display:block; padding-top:6px; }
+    .senarai-murid td.tindakan::before { content:none; }
+    .senarai-murid td.tindakan button { width:100%; margin:0; }
+    .senarai-murid tr.dipadam td:not(.tindakan) { text-decoration:line-through; color:#888; }
+    .panel { padding:10px; }
+    .panel .baris { gap:8px; }
+    .panel .baris select, .panel .baris input { max-width:100%; }
+    table.jadual-profil th { width:40% !important; }
+    .kepala { gap:10px; }
+    .kepala img { width:52px; }
+    .kepala .kelas { font-size:16px; }
+    .tajuk-laporan { font-size:14px; }
+  }
+
   #kawasanCetak { display:none; }
   .kepala .tajuk-laporan { font-size:15px; font-weight:bold; color:#1f4e79; }
   @page { size:A4; margin:12mm 14mm; }
@@ -556,15 +594,16 @@
       return { g: g, label: labelUmur(g), ahli: senarai.filter(function (m) { return kumpulUmur(m) === g; }).sort(susunNama) };
     }).filter(function (k) { return k.ahli.length; });
   }
+  // Setiap sel mempunyai data-label supaya paparan telefon boleh memaparkan kad murid.
   function barisJadual(m) {
     var ibu = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Ibu'; })[0];
     var bapa = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Bapa'; })[0];
     var kls = m.dipadam ? ' class="dipadam"' : '';
-    return '<tr' + kls + '><td>' + esc(m.nama) + (m.dipadam ? ' <span class="kecil">(dipadam)</span>' : '') + '</td>' +
-      '<td>' + esc(m.jantina) + '</td><td>' + esc(m.bangsa) + '</td><td>' + esc(umur(m.tarikhLahir)) + '</td>' +
-      '<td>' + esc(m.statusMurid || 'Aktif') + '</td>' +
-      '<td>' + esc(ibu ? ibu.telefon : '') + ' ' + esc(bapa ? bapa.telefon : '') + '</td>' +
-      '<td><button class="sekunder" onclick="lihat(\'' + m.id + '\')">Lihat</button></td></tr>';
+    return '<tr' + kls + '><td class="nama-murid" data-label="Nama">' + esc(m.nama) + (m.dipadam ? ' <span class="kecil">(dipadam)</span>' : '') + '</td>' +
+      '<td data-label="Jantina">' + esc(m.jantina) + '</td><td data-label="Bangsa">' + esc(bangsaLaporan(m)) + '</td><td data-label="Umur">' + esc(umur(m.tarikhLahir)) + '</td>' +
+      '<td data-label="Status">' + esc(m.statusMurid || 'Aktif') + '</td>' +
+      '<td data-label="Telefon ibu / bapa">' + esc(ibu ? ibu.telefon : '') + ' ' + esc(bapa ? bapa.telefon : '') + '</td>' +
+      '<td class="tindakan"><button class="sekunder" onclick="lihat(\'' + m.id + '\')">Lihat</button></td></tr>';
   }
   function paparStatistik() {
     var aktif = data.students.filter(function (m) { return !m.dipadam; });
@@ -589,7 +628,7 @@
     });
     var kump = kumpulanSusun(senarai).map(function (k) {
       return '<h3>' + esc(k.label) + ' (' + k.ahli.length + ')</h3><div class="jadual">' +
-        '<table><tr><th>Nama</th><th>Jantina</th><th>Bangsa</th><th>Umur</th><th>Status</th><th>Telefon ibu / bapa</th><th></th></tr>' +
+        '<table class="senarai-murid"><tr><th>Nama</th><th>Jantina</th><th>Bangsa</th><th>Umur</th><th>Status</th><th>Telefon ibu / bapa</th><th></th></tr>' +
         k.ahli.map(barisJadual).join('') + '</table></div>';
     }).join('');
     return paparStatistik() + '<h2>Senarai murid</h2><div class="panel">' +
@@ -913,7 +952,7 @@
       '<button class="sekunder" onclick="window.print()">Cetak PDF</button></div>' +
       (m.dipadam ? '<div class="amaran">Rekod ini telah dipadam pada ' + esc(m.dipadamPada) + '.</div>' : '') +
       kepalaLaporan() + '<h2>Profil murid</h2>' +
-      '<table>' +
+      '<table class="jadual-profil">' +
       '<tr><th style="width:35%">Nama murid</th><td>' + esc(m.nama) + '</td></tr>' +
       '<tr><th>No. MyKid</th><td>' + esc(m.mykid) + '</td></tr>' +
       '<tr><th>No. Sijil Kelahiran</th><td>' + esc(m.sijilKelahiran) + '</td></tr>' +
@@ -931,13 +970,13 @@
       '<h3>Ibu bapa dan penjaga</h3>' +
       '<div class="jadual"><table><tr><th>Hubungan</th><th>Nama</th><th>Telefon</th><th>Pekerjaan</th><th>Alamat jika berbeza</th></tr>' + pj + '</table></div>' +
       '<h3>Pendapatan dan tanggungan</h3>' +
-      '<table><tr><th style="width:35%">Anggaran pendapatan isi rumah</th><td>' + esc(m.pendapatan) + '</td></tr>' +
+      '<table class="jadual-profil"><tr><th style="width:35%">Anggaran pendapatan isi rumah</th><td>' + esc(m.pendapatan) + '</td></tr>' +
       '<tr><th>Jumlah tanggungan ibu bapa / penjaga</th><td>' + esc(m.tanggungan) + '</td></tr>' +
       '<tr><th>Status anak</th><td>' + esc(m.statusYatim || 'Tidak yatim') + '</td></tr></table>' +
       '<h3>Kontak kecemasan</h3>' +
       (m.kecemasan && (m.kecemasan.nama || m.kecemasan.telefon) ? '<table><tr><th>Nama</th><th>Hubungan</th><th>Telefon</th></tr><tr><td>' + esc(m.kecemasan.nama) + '</td><td>' + esc(m.kecemasan.hubungan) + '</td><td>' + esc(m.kecemasan.telefon) + '</td></tr></table>' : '<div class="kecil">Tidak diisi.</div>') +
       '<h3>Maklumat kesihatan</h3>' +
-      '<table><tr><th style="width:35%">Alahan</th><td>' + esc(m.kesihatan ? m.kesihatan.alahan : '') + '</td></tr>' +
+      '<table class="jadual-profil"><tr><th style="width:35%">Alahan</th><td>' + esc(m.kesihatan ? m.kesihatan.alahan : '') + '</td></tr>' +
       '<tr><th>Keadaan kesihatan</th><td>' + esc(m.kesihatan ? m.kesihatan.keadaan : '') + '</td></tr>' +
       '<tr><th>Ubat yang diambil</th><td>' + esc(m.kesihatan ? m.kesihatan.ubat : '') + '</td></tr>' +
       '<tr><th>Catatan lain</th><td>' + esc(m.kesihatan ? m.kesihatan.catatan : '') + '</td></tr></table>' +
