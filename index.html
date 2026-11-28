@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rekod Murid Prasekolah (Prototaip v5 - Awan)</title>
+<title>Rekod Murid Prasekolah (Prototaip v6 - Awan)</title>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root { --biru:#1f4e79; --merah:#b03a2e; --kelabu:#f2f2f2; --sempadan:#c9c9c9; }
   * { box-sizing:border-box; }
@@ -271,6 +272,11 @@
   function ralat(k) { return st.errs[k] ? '<div class="ralat">' + esc(st.errs[k]) + '</div>' : ''; }
   function agamaPapar(m) { return m.agama === 'Lain-lain' ? (m.agamaLain || 'Lain-lain') : (m.agama || ''); }
   function bangsaPapar(m) { return m.bangsa === 'Lain-lain' ? (m.bangsaLain || 'Lain-lain') : (m.bangsa || ''); }
+  // Bangsa disertakan bersama etnik dalam laporan, contoh: "Bumiputera Sarawak - Melanau"
+  function bangsaLaporan(m) {
+    var b = bangsaPapar(m);
+    return m.bangsaSebenar ? b + ' - ' + m.bangsaSebenar : b;
+  }
 
   // ---------- Kriptografi: PBKDF2 terbitkan kunci AES-GCM daripada kata laluan ----------
   async function kunciDari(kata, saltHex, iter) {
@@ -964,7 +970,10 @@
     st.view = 'senarai'; st.id = null; st.mesej = 'Rekod dipadam kekal.'; render();
   };
 
-  // ---------- Laporan (PDF melalui cetakan, Excel melalui CSV) ----------
+  // ---------- Laporan (PDF, HTML dan Excel) ----------
+  // Logo dimuatkan sekali sebagai data URL supaya fail boleh dikongsi tanpa pelayan.
+  var logoData = '';
+  var GAYA_LAPORAN = 'body{font-family:Arial,sans-serif;font-size:12px;color:#222;margin:16px}.kepala{display:flex;align-items:center;gap:14px;border-bottom:2px solid #1f4e79;padding-bottom:8px;margin-bottom:12px}.kepala img{width:78px;height:auto}.kelas{font-size:20px;font-weight:bold;color:#1f4e79}.tajuk-laporan{font-size:15px;font-weight:bold;color:#1f4e79}h2{font-size:14px;color:#1f4e79;margin:10px 0 6px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #c9c9c9;padding:5px;text-align:left}th{background:#eef3f9}.cetak-tarikh{font-size:10px;color:#666;margin-top:20px;text-align:right}';
   function paparLaporan() {
     var aktif = data.students.filter(function (m) { return !m.dipadam; });
     var kira = function (x) { return aktif.filter(function (m) { return (m.statusMurid || 'Aktif') === x; }).length; };
@@ -975,7 +984,8 @@
       '<div class="medan"><label>Umur</label><select id="lapUmur">' +
       ['Semua', '5 tahun', '6 tahun', 'Lain-lain umur'].map(function (x) { return '<option value="' + x + '">' + (x === 'Semua' ? 'Semua umur' : x) + '</option>'; }).join('') + '</select></div>' +
       '<div class="baris"><button onclick="cetakLaporan()">Cetak PDF</button><button class="sekunder" onclick="muatTurunExcel()">Muat turun Excel (.csv)</button></div>' +
-      '<div class="kecil">Laporan disusun mengikut umur (5 tahun, 6 tahun, lain-lain), kemudian nama A hingga Z. Excel dijana sebagai fail .csv (UTF-8) yang dibuka terus dengan Excel.</div>' +
+      '<div class="baris"><button onclick="kongsiPdf()">Kongsi PDF (WhatsApp / e-mel)</button><button class="sekunder" onclick="kongsiHtml()">Kongsi HTML</button></div>' +
+      '<div class="kecil">Laporan disusun mengikut umur (5 tahun, 6 tahun, lain-lain), kemudian nama A hingga Z. Butang Kongsi membuka menu kongsi telefon (WhatsApp, e-mel dan lain-lain). Pada komputer, fail dimuat turun. Fail dijana pada peranti ini sahaja.</div>' +
       '<div id="laporan"></div>';
   }
   function senaraiLaporan() {
@@ -983,19 +993,24 @@
     var u = document.getElementById('lapUmur') ? document.getElementById('lapUmur').value : 'Semua';
     return data.students.filter(function (m) { return !m.dipadam && padan(m, s, u, ''); });
   }
-  window.cetakLaporan = function () {
+  // Jana HTML laporan (kandungan sahaja). Pulang '' jika tiada rekod.
+  function htmlLaporan() {
     var kump = kumpulanSusun(senaraiLaporan());
-    if (!kump.length) { st.mesej = 'Tiada rekod untuk pilihan ini.'; return render(); }
-    var html = kepalaLaporan() + kump.map(function (k, idx) {
+    if (!kump.length) return '';
+    return kepalaLaporan() + kump.map(function (k, idx) {
       var baris = k.ahli.map(function (m, i) {
         var ibu = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Ibu'; })[0];
         var bapa = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Bapa'; })[0];
-        return '<tr><td>' + (i + 1) + '</td><td>' + esc(m.nama) + '</td><td>' + esc(m.jantina) + '</td><td>' + esc(bangsaPapar(m)) +
+        return '<tr><td>' + (i + 1) + '</td><td>' + esc(m.nama) + '</td><td>' + esc(m.jantina) + '</td><td>' + esc(bangsaLaporan(m)) +
           '</td><td>' + esc(agamaPapar(m)) + '</td><td>' + esc(ibu ? ibu.telefon : '') + '</td><td>' + esc(bapa ? bapa.telefon : '') + '</td></tr>';
       }).join('');
       return '<div style="' + (idx ? 'page-break-before:always;' : '') + '"><h2>' + esc(labelUmur(k.g)) + ' (' + k.ahli.length + ' murid)</h2>' +
         '<table><tr><th>Bil</th><th>Nama</th><th>Jantina</th><th>Bangsa</th><th>Agama</th><th>Telefon ibu</th><th>Telefon bapa</th></tr>' + baris + '</table></div>';
     }).join('') + '<div class="cetak-tarikh">Dijana pada ' + esc(tarikhSahaja()) + '</div>';
+  }
+  window.cetakLaporan = function () {
+    var html = htmlLaporan();
+    if (!html) { st.mesej = 'Tiada rekod untuk pilihan ini.'; return render(); }
     var kawasan = document.getElementById('kawasanCetak');
     if (!kawasan) { kawasan = document.createElement('div'); kawasan.id = 'kawasanCetak'; document.body.appendChild(kawasan); }
     kawasan.innerHTML = html;
@@ -1022,11 +1037,102 @@
     var kandungan = '﻿' + atas + lajur.map(petak).join(',') + '\r\n' + baris.join('\r\n') + '\r\n';
     muatTurun('senarai-murid.csv', new Blob([kandungan], { type: 'text/csv;charset=utf-8' }));
   };
+
+  // Bina dokumen PDF A4 dengan jadual mengikut kumpulan umur.
+  function pdfLaporan(kump) {
+    if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('Pustaka PDF tidak dimuat. Semak sambungan internet, kemudian cuba semula.');
+    var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
+    var kanan = 196, y = 14;
+    var lajur = [['Bil', 10], ['Nama', 50], ['Jantina', 18], ['Bangsa', 34], ['Agama', 26], ['Tel. ibu', 22], ['Tel. bapa', 22]];
+    if (logoData) { try { doc.addImage(logoData, 'JPEG', 14, y, 20, 20); } catch (e) {} }
+    doc.setTextColor(31, 78, 121);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+    doc.text('Maklumat Murid Pra-Sekolah SK Kidurong II', 38, y + 7);
+    doc.setFontSize(16);
+    doc.text(kelasSemasa(), 38, y + 16);
+    y += 25;
+    doc.setDrawColor(31, 78, 121); doc.line(14, y, kanan, y); y += 7;
+    function kepalaJadual() {
+      doc.setFillColor(238, 243, 249); doc.rect(14, y - 4.5, kanan - 14, 6, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(31, 78, 121);
+      var x = 14;
+      lajur.forEach(function (c) { doc.text(c[0], x + 1, y); x += c[1]; });
+      y += 6;
+    }
+    kump.forEach(function (k) {
+      if (y > 260) { doc.addPage(); y = 14; }
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(31, 78, 121);
+      doc.text(labelUmur(k.g) + ' (' + k.ahli.length + ' murid)', 14, y); y += 6;
+      kepalaJadual();
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(34, 34, 34);
+      k.ahli.forEach(function (m, i) {
+        var ibu = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Ibu'; })[0];
+        var bapa = (m.penjaga || []).filter(function (p) { return p.hubungan === 'Bapa'; })[0];
+        var nilai = [String(i + 1), m.nama || '', m.jantina || '', bangsaLaporan(m), agamaPapar(m), ibu ? ibu.telefon : '', bapa ? bapa.telefon : ''];
+        var pecah = nilai.map(function (v, j) { return doc.splitTextToSize(String(v), lajur[j][1] - 2); });
+        var tinggi = Math.max.apply(null, pecah.map(function (p) { return p.length; })) * 4.5 + 2;
+        if (y + tinggi > 282) {
+          doc.addPage(); y = 14; kepalaJadual();
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(34, 34, 34);
+        }
+        var x = 14;
+        pecah.forEach(function (p, j) { doc.text(p, x + 1, y); x += lajur[j][1]; });
+        y += tinggi;
+        doc.setDrawColor(230, 235, 241); doc.line(14, y - 1.5, kanan, y - 1.5);
+      });
+      y += 6;
+    });
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(102, 102, 102);
+    doc.text('Dijana pada ' + tarikhSahaja(), kanan, 290, { align: 'right' });
+    return doc;
+  }
+
+  function namaFailLaporan(ext) { return 'laporan-murid-' + hariIsoKini() + '.' + ext; }
+
+  // Kongsi fail melalui menu kongsi telefon jika ada; jika tidak, muat turun.
+  function kongsiFail(fail, tajuk) {
+    if (navigator.canShare && navigator.canShare({ files: [fail] })) {
+      navigator.share({ files: [fail], title: tajuk }).catch(function () {});
+      return;
+    }
+    muatTurun(fail.name, fail);
+    st.mesej = 'Fail dimuat turun: ' + fail.name + '. Kongsi melalui WhatsApp atau e-mel dari folder Muat Turun.';
+    render();
+  }
+  window.kongsiPdf = function () {
+    var kump = kumpulanSusun(senaraiLaporan());
+    if (!kump.length) { st.mesej = 'Tiada rekod untuk pilihan ini.'; return render(); }
+    try {
+      var doc = pdfLaporan(kump);
+      kongsiFail(new File([doc.output('blob')], namaFailLaporan('pdf'), { type: 'application/pdf' }), 'Laporan murid');
+    } catch (e) { st.mesej = e.message || 'Gagal menjana PDF.'; render(); }
+  };
+  window.kongsiHtml = function () {
+    var html = htmlLaporan();
+    if (!html) { st.mesej = 'Tiada rekod untuk pilihan ini.'; return render(); }
+    if (logoData) html = html.split('src="' + LOGO + '"').join('src="' + logoData + '"');
+    var dok = '<!DOCTYPE html><html lang="ms"><head><meta charset="UTF-8"><title>Laporan murid pra-sekolah</title><style>' + GAYA_LAPORAN + '</style></head><body>' + html + '</body></html>';
+    kongsiFail(new File([dok], namaFailLaporan('html'), { type: 'text/html' }), 'Laporan murid');
+  };
+
   function muatTurun(nama, blob) {
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = nama;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+  function logoDataUrl() {
+    return fetch(LOGO).then(function (r) {
+      if (!r.ok) throw new Error('logo');
+      return r.blob();
+    }).then(function (b) {
+      return new Promise(function (resolve) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = function () { resolve(''); };
+        fr.readAsDataURL(b);
+      });
+    }).catch(function () { return ''; });
   }
 
   // ---------- Sandaran (disulitkan), pulih dan tukar kata laluan ----------
@@ -1135,6 +1241,7 @@
   };
 
   // ---------- Mula ----------
+  logoDataUrl().then(function (u) { logoData = u; });
   render();
 })();
 </script>
